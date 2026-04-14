@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   DEFAULT_CONFIG,
   loadConfig,
+  validateConfig,
   LANGUAGE_NAMES,
   LEARNER_LEVEL_NAMES,
   CONFIG_FILENAME,
@@ -107,7 +108,7 @@ function renderCurrent(config: Config): string {
     `${pc.bold("Detail level: ")} ${config.detailLevel}`,
     `${pc.bold("Language:     ")} ${LANGUAGE_NAMES[config.language]}`,
     `${pc.bold("Learner level:")} ${LEARNER_LEVEL_NAMES[config.learnerLevel]}`,
-    `${pc.bold("Hooks:        ")} ${hooks.join(" \u2713  ") || "(all disabled)"}`,
+    `${pc.bold("Hooks:        ")} ${hooks.map((h) => `${h} \u2713`).join("  ") || "(all disabled)"}`,
     `${pc.bold("Excluded:     ")} ${excluded}`,
     `${pc.bold("Skip if slow: ")} ${timeoutLabel}`,
   ].join("\n");
@@ -372,7 +373,7 @@ function runConfigGet(args: string[]): void {
     process.stderr.write("[code-explainer] No config file found. Run 'vibe-code-explainer init' first.\n");
     process.exit(1);
   }
-  const config = loadConfig(resolved.configPath) as Record<string, unknown>;
+  const config = loadConfig(resolved.configPath) as unknown as Record<string, unknown>;
   const parts = key.split(".");
   let cur: unknown = config;
   for (const part of parts) {
@@ -421,7 +422,7 @@ function runConfigSet(args: string[]): void {
   }
 
   // Deep-set the key into the config object.
-  const config = loadConfig(resolved.configPath) as Record<string, unknown>;
+  const config = loadConfig(resolved.configPath) as unknown as Record<string, unknown>;
   const parts = key.split(".");
   let cur: Record<string, unknown> = config;
   for (let i = 0; i < parts.length - 1; i++) {
@@ -432,6 +433,15 @@ function runConfigSet(args: string[]): void {
     cur = cur[part] as Record<string, unknown>;
   }
   cur[parts[parts.length - 1]] = value;
+
+  // Validate the mutated config before writing so invalid values are rejected.
+  try {
+    validateConfig(config);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`${msg}\n`);
+    process.exit(1);
+  }
 
   writeFileSync(resolved.configPath, JSON.stringify(config, null, 2) + "\n");
   process.stderr.write(`[code-explainer] Set ${key} = ${JSON.stringify(value)} in ${resolved.configPath}\n`);
