@@ -85,7 +85,9 @@ export interface HookPayload {
   hook_event_name: string;
   tool_name: string;
   tool_input: Record<string, unknown>;
-  tool_response: string;
+  // Claude Code sends this as an object for Edit/Write/MultiEdit and a string
+  // for Bash; type it as unknown so consumers validate before use.
+  tool_response: unknown;
 }
 
 export const CONFIG_FILENAME = "code-explainer.config.json";

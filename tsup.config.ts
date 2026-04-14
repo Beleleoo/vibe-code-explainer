@@ -6,7 +6,7 @@ export default defineConfig({
     "hooks/post-tool": "src/hooks/post-tool.ts",
   },
   format: ["esm"],
-  target: "node18",
+  target: "node20",
   outDir: "dist",
   clean: true,
   sourcemap: true,

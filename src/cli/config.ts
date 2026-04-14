@@ -47,12 +47,11 @@ function normalizeModelName(name: string): string {
 
 function hasModel(installed: string[], wanted: string): boolean {
   const wantedNorm = normalizeModelName(wanted);
+  const wantedLower = wanted.toLowerCase();
   return installed.some((n) => {
     const base = n.toLowerCase();
-    if (base === wanted.toLowerCase()) return true;
-    // Match "qwen3.5:9b" when Ollama returns "qwen3.5:9b" exactly
-    if (base === wanted.toLowerCase()) return true;
-    // Looser match for variant tags
+    if (base === wantedLower) return true;
+    // Looser match for variant tags (e.g. "qwen3.5:9b-q4_K_M" matches "qwen3.5")
     return normalizeModelName(base).startsWith(wantedNorm);
   });
 }

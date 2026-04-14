@@ -163,8 +163,6 @@ export function removeHooksFromSettings(
   return { removed: removedAny, path: lastPath };
 }
 
-export { dirname };
-
 /**
  * Merge code-explainer hooks into the user-level ~/.claude/settings.json,
  * so hooks fire in every project. Used by the global install path.

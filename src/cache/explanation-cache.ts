@@ -1,11 +1,24 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, appendFileSync, unlinkSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import type { ExplanationResult } from "../config/schema.js";
+import { assertSafeSessionId } from "../session/session-id.js";
 
+/**
+ * Per-user tmp subdirectory. Duplicated from session/tracker.ts intentionally
+ * for Phase 1; phase-2 refactor consolidates both into a shared module.
+ */
 function getUserTmpDir(): string {
-  const dir = join(tmpdir(), `code-explainer-${process.getuid?.() ?? "user"}`);
+  let suffix: string;
+  try {
+    const info = userInfo();
+    suffix = typeof info.username === "string" && info.username ? info.username : "user";
+  } catch {
+    suffix = "user";
+  }
+  suffix = suffix.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64) || "user";
+  const dir = join(tmpdir(), `code-explainer-${suffix}`);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
@@ -13,6 +26,7 @@ function getUserTmpDir(): string {
 }
 
 export function getCacheFilePath(sessionId: string): string {
+  assertSafeSessionId(sessionId);
   return join(getUserTmpDir(), `cache-${sessionId}.jsonl`);
 }
 

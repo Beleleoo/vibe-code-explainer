@@ -84,7 +84,11 @@ const DRIFT_ALERT_THRESHOLD = 3;
 
 /**
  * Decide whether to surface a drift alert based on accumulated session state.
- * Fires once every time the unrelated count crosses a multiple of the threshold.
+ * Fires once, on the single edit that takes the unique-unrelated-file count
+ * to exactly DRIFT_ALERT_THRESHOLD. Further unrelated files in the same
+ * session do not refire — the user can run `summary` for a full picture.
+ * This avoids the alert-fatigue pattern where naturally cross-module work
+ * in a monorepo would trigger repeated alerts at 3, 6, 9, etc.
  */
 export function shouldAlertDrift(entries: SessionEntry[]): DriftThresholdResult {
   const uniqueFiles = Array.from(new Set(entries.map((e) => e.file)));
@@ -92,21 +96,18 @@ export function shouldAlertDrift(entries: SessionEntry[]): DriftThresholdResult 
     new Set(entries.filter((e) => e.unrelated).map((e) => e.file))
   );
 
-  // Alert exactly when we hit the threshold (not every call afterwards).
-  const shouldAlert =
-    unrelatedFiles.length > 0 &&
-    unrelatedFiles.length % DRIFT_ALERT_THRESHOLD === 0 &&
-    entries.filter((e) => e.unrelated).length ===
-      entries.filter((e) => e.unrelated).length;
-
-  // Fire specifically on the edit that caused us to cross the threshold.
   const lastEntry = entries[entries.length - 1];
   const lastWasUnrelated = lastEntry?.unrelated ?? false;
-  const crossedThreshold =
-    lastWasUnrelated && unrelatedFiles.length % DRIFT_ALERT_THRESHOLD === 0;
+
+  // Single-fire: alert only on the invocation that takes unique unrelated
+  // file count to exactly the threshold, and only when the triggering edit
+  // itself was the unrelated one (otherwise we'd alert on a benign edit that
+  // simply happened to be logged after a drift crossing).
+  const shouldAlert =
+    lastWasUnrelated && unrelatedFiles.length === DRIFT_ALERT_THRESHOLD;
 
   return {
-    shouldAlert: crossedThreshold && shouldAlert,
+    shouldAlert,
     totalFiles: uniqueFiles.length,
     unrelatedFiles,
   };

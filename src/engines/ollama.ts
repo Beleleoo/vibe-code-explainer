@@ -5,11 +5,9 @@ import type {
   RiskLevel,
 } from "../config/schema.js";
 import { buildOllamaSystemPrompt, buildOllamaUserPrompt } from "../prompts/templates.js";
+import type { EngineOutcome } from "./types.js";
 
-export type EngineOutcome =
-  | { kind: "ok"; result: ExplanationResult }
-  | { kind: "skip"; reason: string; detail?: string }
-  | { kind: "error"; problem: string; cause: string; fix: string };
+export type { EngineOutcome };
 
 export interface OllamaCallInputs {
   filePath: string;
@@ -118,15 +116,20 @@ function coerceDeepDive(v: unknown): DeepDiveItem[] {
     .filter((it) => it.term.length > 0);
 }
 
-export function parseResponse(rawText: string): ExplanationResult | null {
+function coerceRisk(v: unknown): RiskLevel {
+  // Keep parseable results even when the model emits a risk value outside the
+  // enum (e.g. "critical", "unknown", ""). Coercing to "none" preserves the
+  // structured impact/howItWorks/why/deepDive content instead of discarding
+  // the entire parse and falling back to raw text.
+  const s = coerceString(v);
+  return s === "low" || s === "medium" || s === "high" ? s : "none";
+}
+
+function parseResponse(rawText: string): ExplanationResult | null {
   const json = extractJson(rawText);
   if (!json) return null;
   try {
     const parsed = JSON.parse(json) as Record<string, unknown>;
-    const risk = coerceString(parsed.risk) as RiskLevel;
-    if (!["none", "low", "medium", "high"].includes(risk)) {
-      return null;
-    }
     return {
       impact: coerceString(parsed.impact),
       howItWorks: coerceString(parsed.howItWorks),
@@ -134,7 +137,7 @@ export function parseResponse(rawText: string): ExplanationResult | null {
       deepDive: coerceDeepDive(parsed.deepDive),
       isSamePattern: parsed.isSamePattern === true,
       samePatternNote: coerceString(parsed.samePatternNote),
-      risk,
+      risk: coerceRisk(parsed.risk),
       riskReason: coerceString(parsed.riskReason),
     };
   } catch {
@@ -159,16 +162,30 @@ export async function callOllama(inputs: OllamaCallInputs): Promise<EngineOutcom
     };
   }
 
-  const systemPrompt = buildOllamaSystemPrompt(
-    config.detailLevel,
-    config.language,
-    config.learnerLevel
-  );
-  const userPrompt = buildOllamaUserPrompt({
-    filePath: inputs.filePath,
-    diff: inputs.diff,
-    recentSummaries: inputs.recentSummaries,
-  });
+  // Prompt builders read config enums — guard so an unexpected detail/learner
+  // value cannot crash the engine (top-level main() would swallow silently
+  // with no user-visible skip notice, so we surface a structured error here).
+  let systemPrompt: string;
+  let userPrompt: string;
+  try {
+    systemPrompt = buildOllamaSystemPrompt(
+      config.detailLevel,
+      config.language,
+      config.learnerLevel
+    );
+    userPrompt = buildOllamaUserPrompt({
+      filePath: inputs.filePath,
+      diff: inputs.diff,
+      recentSummaries: inputs.recentSummaries,
+    });
+  } catch (err) {
+    return {
+      kind: "error",
+      problem: "Failed to build Ollama prompt",
+      cause: (err as Error).message || String(err),
+      fix: "Check detailLevel/learnerLevel/language values via 'npx vibe-code-explainer config'",
+    };
+  }
 
   const controller = new AbortController();
   // skipIfSlowMs of 0 means "never skip" — don't set a timeout at all.
@@ -198,10 +215,9 @@ export async function callOllama(inputs: OllamaCallInputs): Promise<EngineOutcom
       signal: controller.signal,
     });
 
-    if (timeout !== null) clearTimeout(timeout);
-
     if (!response.ok) {
       const text = await response.text().catch(() => "");
+      if (timeout !== null) clearTimeout(timeout);
       if (response.status === 404 || /model.*not found/i.test(text)) {
         return {
           kind: "error",
@@ -218,7 +234,10 @@ export async function callOllama(inputs: OllamaCallInputs): Promise<EngineOutcom
       };
     }
 
+    // Keep the AbortSignal active across the body read. If Ollama starts
+    // streaming headers then stalls mid-body, the controller will still abort.
     const data = await response.json() as { response?: string };
+    if (timeout !== null) clearTimeout(timeout);
     const rawText = data.response ?? "";
 
     if (!rawText.trim()) {

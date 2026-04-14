@@ -1,8 +1,9 @@
 import { join } from "node:path";
 import { loadConfig, DEFAULT_CONFIG } from "../config/schema.js";
 import type { Config, HookPayload, ExplanationResult } from "../config/schema.js";
-import { callOllama, type EngineOutcome } from "../engines/ollama.js";
+import { callOllama } from "../engines/ollama.js";
 import { callClaude } from "../engines/claude.js";
+import type { EngineOutcome } from "../engines/types.js";
 import {
   extractEditDiff,
   extractNewFileDiff,
@@ -15,6 +16,7 @@ import { formatExplanationBox, formatDriftAlert, formatSkipNotice, formatErrorNo
 import { recordEntry, readSession, getRecentSummaries, cleanStaleSessionFiles } from "../session/tracker.js";
 import { analyzeDrift, shouldAlertDrift } from "../session/drift.js";
 import { getCached, setCached } from "../cache/explanation-cache.js";
+import { isSafeSessionId } from "../session/session-id.js";
 
 const output: string[] = [];
 
@@ -26,15 +28,29 @@ function addOutput(text: string): void {
  * Emit the Claude Code hook JSON on stdout so the accumulated output
  * appears as a system message in the user's terminal. Always exit 0 so
  * Claude Code is never blocked.
+ *
+ * Uses the write-then-exit-in-callback pattern: on piped stdio (which is
+ * how Claude Code invokes the hook) a bare `process.exit(0)` right after
+ * `process.stdout.write(...)` can truncate the buffered payload. Waiting
+ * for the write callback ensures the JSON envelope reaches the parent
+ * process. A backstop timeout guarantees eventual exit even if the stream
+ * never drains.
  */
 function safeExit(): never {
-  if (output.length > 0) {
-    // Leading newline separates the box from Claude Code's "PostToolUse:X says:"
-    // prefix, which otherwise renders on the same line as the top border.
-    const systemMessage = "\n" + output.join("\n");
-    process.stdout.write(JSON.stringify({ systemMessage }) + "\n");
+  if (output.length === 0) {
+    process.exit(0);
   }
-  process.exit(0);
+  // Leading newline separates the box from Claude Code's "PostToolUse:X says:"
+  // prefix, which otherwise renders on the same line as the top border.
+  const systemMessage = "\n" + output.join("\n");
+  const payload = JSON.stringify({ systemMessage }) + "\n";
+  process.stdout.write(payload, () => process.exit(0));
+  // Backstop: force exit in 500ms if the callback never fires (e.g. stdout
+  // detached). Accept occasional truncation over hanging the pipe.
+  setTimeout(() => process.exit(0), 500);
+  // Unreachable: either the write callback or the timeout terminates the
+  // process. Throw only to satisfy the `never` return type.
+  throw new Error("unreachable");
 }
 
 async function readStdin(): Promise<string> {
@@ -54,10 +70,17 @@ async function readStdin(): Promise<string> {
 function parsePayload(raw: string): HookPayload | null {
   try {
     const parsed = JSON.parse(raw);
-    if (typeof parsed.session_id === "string" && typeof parsed.tool_name === "string") {
-      return parsed as HookPayload;
-    }
-    return null;
+    if (typeof parsed !== "object" || parsed === null) return null;
+    // session_id must be a safe identifier — it's interpolated into
+    // tmpdir paths, so an attacker-controlled value like `../../evil`
+    // would escape the user-private dir.
+    if (!isSafeSessionId(parsed.session_id)) return null;
+    if (typeof parsed.tool_name !== "string") return null;
+    // tool_input is declared required in the schema and dereferenced below;
+    // reject payloads where it's missing or not an object rather than
+    // relying on the top-level catch to swallow a later TypeError silently.
+    if (typeof parsed.tool_input !== "object" || parsed.tool_input === null) return null;
+    return parsed as HookPayload;
   } catch {
     return null;
   }

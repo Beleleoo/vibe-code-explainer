@@ -87,10 +87,18 @@ const READONLY_COMMANDS = new Set([
 /**
  * Split a command string on pipe, semicolon, and logical operators.
  * Returns each sub-command with leading whitespace trimmed.
+ *
+ * Scope / limitations:
+ *   - Does NOT parse quotes, heredocs, or subshell boundaries (`$(...)`, backticks).
+ *     A command like `echo 'a ; rm x'` will be (incorrectly) split on the quoted `;`.
+ *   - Does NOT handle the background operator `&` — `cmd1 & cmd2` is treated as one.
+ *   - Does NOT unescape backslash-escaped operators.
+ *
+ * This is a vibe-coder heuristic, not a shell parser. The bash filter's
+ * safer posture (capture-unless-readonly, recursive mutating-token scan)
+ * catches the cases this splitter misses.
  */
 export function splitCommandChain(command: string): string[] {
-  // Split on unquoted chain operators. A simple split is good enough for
-  // the vibe-coder case; we explicitly do not handle exotic quoting.
   return command
     .split(/(?:\|\||&&|[|;])/)
     .map((s) => s.trim())

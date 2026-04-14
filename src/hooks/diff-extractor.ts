@@ -153,6 +153,37 @@ export function extractNewFileDiff(filePath: string, cwd: string): DiffResult {
   return { kind: "empty" };
 }
 
+/**
+ * Inspect the first 8KB of the raw file bytes to decide whether content is
+ * binary BEFORE decoding as UTF-8. Node's `readFileSync(path, 'utf-8')`
+ * replaces invalid bytes with U+FFFD rather than preserving null bytes,
+ * which means binary files without literal NULs (PNG/WASM/.mo/most
+ * proprietary formats) would silently pass a later `raw.includes("\0")`
+ * check and be sent to the LLM as garbled "text".
+ */
+function looksBinary(buf: Buffer): boolean {
+  const sample = buf.length > 8192 ? buf.subarray(0, 8192) : buf;
+  if (sample.length === 0) return false;
+  if (sample.indexOf(0) !== -1) return true;
+  let nonPrint = 0;
+  for (let i = 0; i < sample.length; i++) {
+    const b = sample[i];
+    // Common whitespace (tab, LF, CR), printable ASCII, or UTF-8 continuation
+    // / high-bit bytes. Count anything else as suspicious.
+    if (
+      b === 0x09 ||
+      b === 0x0a ||
+      b === 0x0d ||
+      (b >= 0x20 && b <= 0x7e) ||
+      b >= 0x80
+    ) {
+      continue;
+    }
+    nonPrint++;
+  }
+  return nonPrint / sample.length > 0.3;
+}
+
 function readFileAsNewDiff(filePath: string): DiffResult {
   if (!existsSync(filePath)) {
     return { kind: "skip", reason: `file not found: ${filePath}` };
@@ -164,14 +195,17 @@ function readFileAsNewDiff(filePath: string): DiffResult {
       return { kind: "skip", reason: `file too large (${Math.round(stat.size / 1024)}KB)` };
     }
 
-    const raw = readFileSync(filePath, "utf-8");
-    if (!raw.trim()) {
+    const buf = readFileSync(filePath);
+    if (buf.length === 0) {
       return { kind: "empty" };
     }
-
-    // Check for binary content (null bytes).
-    if (raw.includes("\0")) {
+    if (looksBinary(buf)) {
       return { kind: "binary", message: `Binary file created: ${filePath}` };
+    }
+
+    const raw = buf.toString("utf-8");
+    if (!raw.trim()) {
+      return { kind: "empty" };
     }
 
     const withMarkers = raw.split("\n").map((l) => `+ ${l}`).join("\n");

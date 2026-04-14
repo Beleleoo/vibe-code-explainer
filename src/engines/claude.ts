@@ -6,7 +6,7 @@ import type {
   RiskLevel,
 } from "../config/schema.js";
 import { buildClaudePrompt } from "../prompts/templates.js";
-import type { EngineOutcome } from "./ollama.js";
+import type { EngineOutcome } from "./types.js";
 
 export interface ClaudeCallInputs {
   filePath: string;
@@ -83,13 +83,16 @@ function coerceDeepDive(v: unknown): DeepDiveItem[] {
     .filter((it) => it.term.length > 0);
 }
 
+function coerceRisk(v: unknown): RiskLevel {
+  const s = coerceString(v);
+  return s === "low" || s === "medium" || s === "high" ? s : "none";
+}
+
 function parseResponse(rawText: string): ExplanationResult | null {
   const json = extractJson(rawText);
   if (!json) return null;
   try {
     const parsed = JSON.parse(json) as Record<string, unknown>;
-    const risk = coerceString(parsed.risk) as RiskLevel;
-    if (!["none", "low", "medium", "high"].includes(risk)) return null;
     return {
       impact: coerceString(parsed.impact),
       howItWorks: coerceString(parsed.howItWorks),
@@ -97,7 +100,7 @@ function parseResponse(rawText: string): ExplanationResult | null {
       deepDive: coerceDeepDive(parsed.deepDive),
       isSamePattern: parsed.isSamePattern === true,
       samePatternNote: coerceString(parsed.samePatternNote),
-      risk,
+      risk: coerceRisk(parsed.risk),
       riskReason: coerceString(parsed.riskReason),
     };
   } catch {
@@ -151,14 +154,26 @@ function runClaude(prompt: string, timeoutMs: number): Promise<ExecResult> {
 }
 
 export async function callClaude(inputs: ClaudeCallInputs): Promise<EngineOutcome> {
-  const prompt = buildClaudePrompt(inputs.config.detailLevel, {
-    filePath: inputs.filePath,
-    diff: inputs.diff,
-    userPrompt: inputs.userPrompt,
-    language: inputs.config.language,
-    learnerLevel: inputs.config.learnerLevel,
-    recentSummaries: inputs.recentSummaries,
-  });
+  // Guard prompt building so config-enum drift cannot throw out of the engine
+  // (top-level main() would otherwise swallow silently with no skip notice).
+  let prompt: string;
+  try {
+    prompt = buildClaudePrompt(inputs.config.detailLevel, {
+      filePath: inputs.filePath,
+      diff: inputs.diff,
+      userPrompt: inputs.userPrompt,
+      language: inputs.config.language,
+      learnerLevel: inputs.config.learnerLevel,
+      recentSummaries: inputs.recentSummaries,
+    });
+  } catch (err) {
+    return {
+      kind: "error",
+      problem: "Failed to build Claude prompt",
+      cause: (err as Error).message || String(err),
+      fix: "Check detailLevel/learnerLevel/language values via 'npx vibe-code-explainer config'",
+    };
+  }
 
   try {
     const result = await runClaude(prompt, inputs.config.skipIfSlowMs);
