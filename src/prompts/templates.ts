@@ -54,8 +54,11 @@ export function detectLanguage(filePath: string): string {
 // Diff sanitization (prompt-injection guard)
 // ===========================================================================
 
+// Covers common single-line comment prefixes used in many languages, plus
+// string-literal delimiters and HTML comment openers so attackers can't
+// sneak injection keywords through code comment or string literal syntax.
 const INJECTION_PATTERN =
-  /^[+\-\s]*(?:\/\/+|\/\*+|#+|--|;+|\*+)?\s*(RULES?|SYSTEM|INSTRUCTION|OUTPUT|PROMPT|ASSISTANT|USER)\s*:/i;
+  /^[+\-\s]*(?:\/\/+|\/\*+|#+|--|;+|\*+|`+|'+|"+|<!--+|@+|%%*)?\s*(RULES?|SYSTEM|INSTRUCTION|OUTPUT|PROMPT|ASSISTANT|USER|CONTEXT|IGNORE\s+PREVIOUS|DISREGARD|FORGET)\s*:/i;
 
 export interface SanitizeResult {
   sanitized: string;
@@ -64,7 +67,10 @@ export interface SanitizeResult {
 }
 
 export function sanitizeDiff(diff: string, maxChars = 4000): SanitizeResult {
-  const lines = diff.split("\n");
+  // NFKC-normalize before matching so that full-width or ligature unicode
+  // characters (e.g. ｓｙｓｔｅｍ) cannot bypass the keyword check.
+  const normalized = diff.normalize("NFKC");
+  const lines = normalized.split("\n");
   const kept: string[] = [];
   let linesStripped = 0;
 

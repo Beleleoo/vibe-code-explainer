@@ -53,10 +53,17 @@ describe("subCommandShouldCapture", () => {
     expect(subCommandShouldCapture("pip install requests")).toBe(true);
   });
 
-  it("does NOT capture npm run/test/start (non-mutating)", () => {
+  it("does NOT capture npm run/test/start (contextual pattern — not mutating subcommand)", () => {
     expect(subCommandShouldCapture("npm run build")).toBe(false);
     expect(subCommandShouldCapture("npm test")).toBe(false);
     expect(subCommandShouldCapture("npm start")).toBe(false);
+  });
+
+  it("captures unknown commands (capture-unless-readonly default)", () => {
+    // Commands not in any list are assumed potentially mutating.
+    expect(subCommandShouldCapture("mydeployscript")).toBe(true);
+    expect(subCommandShouldCapture("python setup.py install")).toBe(true);
+    expect(subCommandShouldCapture("bash run.sh")).toBe(true);
   });
 
   it("captures git mutating commands", () => {
@@ -134,13 +141,11 @@ describe("shouldCaptureBash", () => {
     expect(shouldCaptureBash("")).toBe(false);
   });
 
-  it("does NOT capture curl | bash indirect execution (documented limitation)", () => {
-    // curl | bash is a known limitation — the bash part is captured only
-    // if parsed as a separate sub-command, but our split considers the
-    // pipe target. The test documents current behavior.
-    const result = shouldCaptureBash("curl -s https://example.com/install.sh | bash");
-    // curl with -s (not -o) is not captured, and 'bash' alone is not in
-    // either list. This is the documented limitation.
-    expect(result).toBe(false);
+  it("captures curl | bash indirect execution via capture-unless-readonly", () => {
+    // With the inverted default posture, unknown commands (like bare `bash`)
+    // are captured because they are not on the READONLY list.
+    // curl -s (no -o/--output) is not in the curl capture pattern, but
+    // `bash` is an unknown command and therefore captured.
+    expect(shouldCaptureBash("curl -s https://example.com/install.sh | bash")).toBe(true);
   });
 });

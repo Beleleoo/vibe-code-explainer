@@ -1,10 +1,15 @@
 /**
  * Bash command filter — decides whether a Bash command should trigger an
- * explanation. Filters to filesystem-mutating and state-changing commands
- * while skipping read-only operations.
+ * explanation.
+ *
+ * Default posture: capture-unless-readonly.
+ * Any command NOT on the READONLY list is assumed potentially mutating and
+ * triggers an explanation. Known mutating commands and contextual commands are
+ * checked explicitly, but unknown commands also trigger — it is safer to
+ * over-explain than to silently skip a destructive but unfamiliar command.
  */
 
-// Commands that modify filesystem or project state.
+// Commands that modify filesystem or project state — explicit capture list.
 const MUTATING_COMMANDS = new Set([
   "rm",
   "mv",
@@ -16,6 +21,31 @@ const MUTATING_COMMANDS = new Set([
   "ln",
   "touch",
   "dd",
+  "tee",
+  "install",
+  "truncate",
+  "shred",
+  "rsync",
+  "scp",
+  "sftp",
+  "mount",
+  "umount",
+  "kill",
+  "killall",
+  "pkill",
+  "crontab",
+  "useradd",
+  "userdel",
+  "usermod",
+  "groupadd",
+  "groupdel",
+  "passwd",
+  "chpasswd",
+  "visudo",
+  "systemctl",
+  "service",
+  "launchctl",
+  // Note: brew is in CONTEXTUAL_COMMANDS (finer-grained control); do not add here.
 ]);
 
 // Commands that need a specific subcommand/flag to be mutating.
@@ -138,7 +168,8 @@ export function subCommandShouldCapture(subCmd: string): boolean {
     return contextPattern.test(rest);
   }
 
-  return false;
+  // Capture-unless-readonly: unknown commands are assumed potentially mutating.
+  return true;
 }
 
 /**
