@@ -1,0 +1,55 @@
+{
+  "name": "vibe-code-explainer",
+  "version": "0.3.4",
+  "description": "Real-time diff explanations for vibe coders using Claude Code",
+  "type": "module",
+  "bin": {
+    "vibe-code-explainer": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "claude-code",
+    "hooks",
+    "diff",
+    "explainer",
+    "vibe-coding",
+    "code-review"
+  ],
+  "author": "Beleleoo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/easycao/Code-Explainer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/easycao/Code-Explainer/issues"
+  },
+  "homepage": "https://github.com/easycao/Code-Explainer#readme",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.10.0",
+    "picocolors": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
