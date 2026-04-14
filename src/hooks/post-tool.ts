@@ -297,5 +297,9 @@ async function main(): Promise<void> {
 
 main().catch(() => {
   // Never fail the hook — always exit 0.
-  safeExit();
+  // Do NOT call safeExit() here: safeExit() throws after writing its payload,
+  // which causes this catch to fire and call safeExit() again, producing two
+  // JSON lines on stdout. Claude Code concatenates them, JSON.parse fails, and
+  // the explanation is silently dropped. Just exit cleanly instead.
+  process.exit(0);
 });

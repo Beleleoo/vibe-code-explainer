@@ -1,10 +1,10 @@
 {
   "name": "vibe-code-explainer",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Real-time diff explanations for vibe coders using Claude Code",
   "type": "module",
   "bin": {
-    "vibe-code-explainer": "./dist/cli/index.js"
+    "vibe-code-explainer": "dist/cli/index.js"
   },
   "scripts": {
     "build": "tsup",
