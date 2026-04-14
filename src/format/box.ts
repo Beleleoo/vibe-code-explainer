@@ -299,8 +299,12 @@ function buildBoxOutput(
   const width = Math.min(getTerminalWidth() - 2, 70);
   const innerWidth = width - 2; // chars between │ │
 
-  const top = `\u256d\u2500 ${dim(BOX_TITLE)} ${"\u2500".repeat(Math.max(0, innerWidth - BOX_TITLE.length - 4))}\u2500\u256e`;
-  const bottom = `\u2570${"\u2500".repeat(innerWidth)}\u256f`;
+  const dashesRight = "\u2500".repeat(Math.max(0, innerWidth - BOX_TITLE.length - 4));
+  const top =
+    rgb(borderColor, `\u256d\u2500 `) +
+    dim(BOX_TITLE) +
+    rgb(borderColor, ` ${dashesRight}\u2500\u256e`);
+  const bottom = rgb(borderColor, `\u2570${"\u2500".repeat(innerWidth)}\u256f`);
 
   const sideChar = rgb(borderColor, "\u2502");
 
@@ -309,7 +313,7 @@ function buildBoxOutput(
     return `${sideChar}${" ".repeat(PAD_LEFT)}${bl.text}${padding}${" ".repeat(PAD_RIGHT)}${sideChar}`;
   });
 
-  return [rgb(borderColor, top), ...middle, rgb(borderColor, bottom)].join("\n");
+  return [top, ...middle, bottom].join("\n");
 }
 
 // ===========================================================================
