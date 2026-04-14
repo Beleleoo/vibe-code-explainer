@@ -26,20 +26,13 @@ export function parseFlags(args: string[]): ParsedFlags {
     if (arg.startsWith("--")) {
       const eqIdx = arg.indexOf("=");
       if (eqIdx !== -1) {
-        // --flag=value
+        // --flag=value  (only this form captures a string value)
         const name = arg.slice(2, eqIdx);
         const value = arg.slice(eqIdx + 1);
         flags[name] = value;
       } else {
-        const name = arg.slice(2);
-        // Peek ahead: if next token is a non-flag, treat as value.
-        const next = args[i + 1];
-        if (next !== undefined && !next.startsWith("-")) {
-          flags[name] = next;
-          i++;
-        } else {
-          flags[name] = true;
-        }
+        // --flag  (always boolean; no peek-consume to avoid positional ambiguity)
+        flags[arg.slice(2)] = true;
       }
     } else if (arg.startsWith("-") && arg.length === 2) {
       // Short flags: -j, -y

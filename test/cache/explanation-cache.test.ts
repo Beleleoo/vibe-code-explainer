@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import type { ExplanationResult } from "../../src/config/schema.js";
 import {
   hashDiff,
   getCached,
@@ -7,6 +8,19 @@ import {
   clearCache,
   getCacheFilePath,
 } from "../../src/cache/explanation-cache.js";
+
+function makeResult(impact: string): ExplanationResult {
+  return {
+    impact,
+    howItWorks: "",
+    why: "",
+    deepDive: [],
+    isSamePattern: false,
+    samePatternNote: "",
+    risk: "none",
+    riskReason: "",
+  };
+}
 
 const SESSION = "test-session-" + Date.now();
 
@@ -51,11 +65,7 @@ describe("cache get/set", () => {
 
   it("returns cached result on hit", () => {
     const diff = "- old\n+ new";
-    const result = {
-      summary: "Visual change.",
-      risk: "none" as const,
-      riskReason: "",
-    };
+    const result = makeResult("Visual change.");
     setCached(SESSION, diff, result);
 
     const cached = getCached(SESSION, diff);
@@ -63,41 +73,23 @@ describe("cache get/set", () => {
   });
 
   it("does not hit cache with different diff", () => {
-    const result = {
-      summary: "Visual change.",
-      risk: "none" as const,
-      riskReason: "",
-    };
-    setCached(SESSION, "original diff", result);
-
+    setCached(SESSION, "original diff", makeResult("First."));
     const cached = getCached(SESSION, "different diff");
     expect(cached).toBeUndefined();
   });
 
   it("returns most recent entry when same diff is cached multiple times", () => {
     const diff = "same diff";
-    setCached(SESSION, diff, {
-      summary: "First.",
-      risk: "none",
-      riskReason: "",
-    });
-    setCached(SESSION, diff, {
-      summary: "Second.",
-      risk: "low",
-      riskReason: "Updated.",
-    });
+    setCached(SESSION, diff, makeResult("First."));
+    setCached(SESSION, diff, { ...makeResult("Second."), risk: "low", riskReason: "Updated." });
 
     const cached = getCached(SESSION, diff);
-    expect(cached?.summary).toBe("Second.");
+    expect(cached?.impact).toBe("Second.");
     expect(cached?.risk).toBe("low");
   });
 
   it("clearCache removes the session file", () => {
-    setCached(SESSION, "x", {
-      summary: "ok",
-      risk: "none",
-      riskReason: "",
-    });
+    setCached(SESSION, "x", makeResult("ok"));
     expect(existsSync(getCacheFilePath(SESSION))).toBe(true);
 
     clearCache(SESSION);
@@ -108,5 +100,57 @@ describe("cache get/set", () => {
     const uniqueSession = "never-written-" + Date.now();
     const result = getCached(uniqueSession, "x");
     expect(result).toBeUndefined();
+  });
+
+  it("sets mode 0o600 on the cache file (unix only)", () => {
+    if (process.platform === "win32") return;
+    setCached(SESSION, "x", makeResult("ok"));
+    const path = getCacheFilePath(SESSION);
+    const mode = statSync(path).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+});
+
+describe("cache rotation", () => {
+  const ROT_SESSION = "rotation-test-" + Date.now();
+
+  afterEach(() => {
+    clearCache(ROT_SESSION);
+  });
+
+  it("rotates cache file when entries exceed 500", () => {
+    // Write 501 unique diffs to trigger rotation on the 501st write.
+    for (let i = 0; i < 501; i++) {
+      setCached(ROT_SESSION, `diff-${i}`, makeResult(`Impact ${i}`));
+    }
+
+    const path = getCacheFilePath(ROT_SESSION);
+    const lines = readFileSync(path, "utf-8").split("\n").filter((l) => l.trim());
+    // After rotation: at most 250 unique entries + the final append = 251
+    expect(lines.length).toBeLessThanOrEqual(251);
+  });
+
+  it("keeps the most recent entries after rotation", () => {
+    for (let i = 0; i < 501; i++) {
+      setCached(ROT_SESSION, `diff-${i}`, makeResult(`Impact ${i}`));
+    }
+
+    // The last written diff should still be retrievable.
+    const cached = getCached(ROT_SESSION, "diff-500");
+    expect(cached?.impact).toBe("Impact 500");
+  });
+
+  it("deduplicates by hash when rotating, keeping latest occurrence", () => {
+    // Write the same diff many times — only the latest should survive rotation.
+    for (let i = 0; i < 300; i++) {
+      setCached(ROT_SESSION, "repeated-diff", makeResult(`Version ${i}`));
+    }
+    // Pad with unique entries to push past 500.
+    for (let i = 0; i < 210; i++) {
+      setCached(ROT_SESSION, `unique-${i}`, makeResult(`Unique ${i}`));
+    }
+
+    const cached = getCached(ROT_SESSION, "repeated-diff");
+    expect(cached?.impact).toBe("Version 299");
   });
 });

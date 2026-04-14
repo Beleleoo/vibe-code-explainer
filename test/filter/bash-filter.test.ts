@@ -141,6 +141,15 @@ describe("shouldCaptureBash", () => {
     expect(shouldCaptureBash("")).toBe(false);
   });
 
+  it("captures commands matching user-configured capturePatterns", () => {
+    expect(shouldCaptureBash("mydeployscript --env prod", ["mydeployscript"])).toBe(true);
+    expect(shouldCaptureBash("terraform apply -auto-approve", ["terraform apply"])).toBe(true);
+  });
+
+  it("does not falsely trigger capturePatterns on unrelated commands", () => {
+    expect(shouldCaptureBash("ls terraform", ["terraform apply"])).toBe(false);
+  });
+
   it("captures curl | bash indirect execution via capture-unless-readonly", () => {
     // With the inverted default posture, unknown commands (like bare `bash`)
     // are captured because they are not on the READONLY list.
