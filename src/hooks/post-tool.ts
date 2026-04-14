@@ -211,7 +211,7 @@ async function main(): Promise<void> {
   } else if (lowerTool === "bash") {
     const input = payload.tool_input as { command?: string };
     const command = input.command ?? "";
-    if (!command || !shouldCaptureBash(command)) safeExit();
+    if (!command || !shouldCaptureBash(command, config.bashFilter.capturePatterns)) safeExit();
     filePath = "<bash command>";
     diff = command;
   } else {

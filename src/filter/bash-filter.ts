@@ -175,8 +175,17 @@ export function subCommandShouldCapture(subCmd: string): boolean {
 /**
  * Decide whether a full command string should trigger a code-explainer
  * explanation. Returns true if ANY sub-command in the chain is mutating.
+ *
+ * Pass `capturePatterns` from config.bashFilter.capturePatterns to also
+ * match user-defined literal substrings before applying the built-in rules.
+ * This lets users add patterns like "mydeployscript" or "terraform apply".
  */
-export function shouldCaptureBash(command: string): boolean {
+export function shouldCaptureBash(command: string, capturePatterns: string[] = []): boolean {
+  // User-defined literal patterns take priority — if any pattern is a
+  // substring of the raw command string, capture immediately.
+  if (capturePatterns.length > 0 && capturePatterns.some((p) => command.includes(p))) {
+    return true;
+  }
   const parts = splitCommandChain(command);
   return parts.some((p) => subCommandShouldCapture(p));
 }

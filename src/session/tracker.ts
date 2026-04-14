@@ -134,16 +134,24 @@ function findLatestSession(): string | undefined {
   }
 }
 
-export async function printSummary(): Promise<void> {
+export async function printSummary({ json = false }: { json?: boolean } = {}): Promise<void> {
   const sessionId = getSessionIdFromEnv() ?? findLatestSession();
   if (!sessionId) {
-    process.stderr.write("[code-explainer] No active session found. Session data is created when Claude Code makes changes.\n");
+    if (json) {
+      process.stdout.write(JSON.stringify({ error: "No active session found" }) + "\n");
+    } else {
+      process.stderr.write("[code-explainer] No active session found. Session data is created when Claude Code makes changes.\n");
+    }
     return;
   }
 
   const entries = readSession(sessionId);
   if (entries.length === 0) {
-    process.stderr.write(`[code-explainer] Session '${sessionId}' has no recorded changes yet.\n`);
+    if (json) {
+      process.stdout.write(JSON.stringify({ sessionId, totalChanges: 0, files: [], risks: { none: 0, low: 0, medium: 0, high: 0 } }) + "\n");
+    } else {
+      process.stderr.write(`[code-explainer] Session '${sessionId}' has no recorded changes yet.\n`);
+    }
     return;
   }
 
@@ -151,6 +159,23 @@ export async function printSummary(): Promise<void> {
   const unrelated = entries.filter((e) => e.unrelated);
   const uniqueFiles = Array.from(new Set(entries.map((e) => e.file)));
   const unrelatedFiles = Array.from(new Set(unrelated.map((e) => e.file)));
+
+  const risks: Record<RiskLevel, number> = { none: 0, low: 0, medium: 0, high: 0 };
+  for (const e of entries) risks[e.risk]++;
+
+  if (json) {
+    process.stdout.write(JSON.stringify({
+      sessionId,
+      totalChanges: entries.length,
+      filesCount: uniqueFiles.length,
+      relatedChanges: related.length,
+      unrelatedChanges: unrelated.length,
+      unrelatedFiles,
+      risks,
+      entries: entries.map((e) => ({ file: e.file, risk: e.risk, summary: e.summary, unrelated: !!e.unrelated })),
+    }, null, 2) + "\n");
+    return;
+  }
 
   const alert = formatDriftAlert(uniqueFiles.length, unrelatedFiles);
   printToStderr(alert);
@@ -160,8 +185,6 @@ export async function printSummary(): Promise<void> {
   process.stderr.write(`Related changes: ${related.length}\n`);
   process.stderr.write(`Unrelated/risky: ${unrelated.length}\n`);
 
-  const risks: Record<RiskLevel, number> = { none: 0, low: 0, medium: 0, high: 0 };
-  for (const e of entries) risks[e.risk]++;
   process.stderr.write(`\nRisk breakdown:\n`);
   process.stderr.write(`  None:   ${risks.none}\n`);
   process.stderr.write(`  Low:    ${risks.low}\n`);

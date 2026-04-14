@@ -17,6 +17,7 @@ import {
   type LearnerLevel,
 } from "../config/schema.js";
 import { MODEL_OPTIONS } from "../detect/vram.js";
+import { parseFlags, flagBool } from "./flags.js";
 
 interface OllamaTagResponse {
   models?: Array<{ name?: string; model?: string }>;
@@ -324,8 +325,129 @@ async function changeTimeout(config: Config): Promise<Config> {
   return { ...config, skipIfSlowMs: value };
 }
 
-export async function runConfig(): Promise<void> {
-  // Prefer project config if present; otherwise edit the global config.
+function resolveConfigPath(): { configPath: string; scope: "project" | "global" } | null {
+  const projectPath = join(process.cwd(), CONFIG_FILENAME);
+  const globalPath = getGlobalConfigPath();
+  if (existsSync(projectPath)) return { configPath: projectPath, scope: "project" };
+  if (existsSync(globalPath)) return { configPath: globalPath, scope: "global" };
+  return null;
+}
+
+/**
+ * config show [--json]
+ * Print the effective config. With --json, outputs machine-readable JSON so
+ * agents can pipe to jq or parse directly.
+ */
+function runConfigShow(args: string[]): void {
+  const { flags } = parseFlags(args);
+  const json = flagBool(flags, "json", "j");
+
+  const resolved = resolveConfigPath();
+  if (!resolved) {
+    process.stderr.write("[code-explainer] No config file found. Run 'vibe-code-explainer init' first.\n");
+    process.exit(1);
+  }
+  const config = loadConfig(resolved.configPath);
+  if (json) {
+    process.stdout.write(JSON.stringify(config, null, 2) + "\n");
+  } else {
+    process.stderr.write(renderCurrent(config) + "\n");
+  }
+}
+
+/**
+ * config get <key>
+ * Print a single config field as a plain string (for scripting).
+ * Key may be dot-separated for nested fields (e.g. hooks.bash).
+ */
+function runConfigGet(args: string[]): void {
+  const { positional } = parseFlags(args);
+  const key = positional[0];
+  if (!key) {
+    process.stderr.write("[code-explainer] Usage: vibe-code-explainer config get <key>\n");
+    process.exit(1);
+  }
+  const resolved = resolveConfigPath();
+  if (!resolved) {
+    process.stderr.write("[code-explainer] No config file found. Run 'vibe-code-explainer init' first.\n");
+    process.exit(1);
+  }
+  const config = loadConfig(resolved.configPath) as Record<string, unknown>;
+  const parts = key.split(".");
+  let cur: unknown = config;
+  for (const part of parts) {
+    if (typeof cur !== "object" || cur === null) {
+      process.stderr.write(`[code-explainer] Key '${key}' not found in config.\n`);
+      process.exit(1);
+    }
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  if (cur === undefined) {
+    process.stderr.write(`[code-explainer] Key '${key}' not found in config.\n`);
+    process.exit(1);
+  }
+  // Output plain scalar or JSON for objects/arrays.
+  if (typeof cur === "object") {
+    process.stdout.write(JSON.stringify(cur) + "\n");
+  } else {
+    process.stdout.write(String(cur) + "\n");
+  }
+}
+
+/**
+ * config set <key> <value>
+ * Set a single config field. The value is parsed as JSON when it looks like
+ * a JSON literal (number, boolean, array, object), otherwise treated as a
+ * plain string.
+ */
+function runConfigSet(args: string[]): void {
+  const { positional } = parseFlags(args);
+  const [key, rawValue] = positional;
+  if (!key || rawValue === undefined) {
+    process.stderr.write("[code-explainer] Usage: vibe-code-explainer config set <key> <value>\n");
+    process.exit(1);
+  }
+  const resolved = resolveConfigPath();
+  if (!resolved) {
+    process.stderr.write("[code-explainer] No config file found. Run 'vibe-code-explainer init' first.\n");
+    process.exit(1);
+  }
+
+  let value: unknown = rawValue;
+  try {
+    value = JSON.parse(rawValue);
+  } catch {
+    // Use as plain string
+  }
+
+  // Deep-set the key into the config object.
+  const config = loadConfig(resolved.configPath) as Record<string, unknown>;
+  const parts = key.split(".");
+  let cur: Record<string, unknown> = config;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i];
+    if (typeof cur[part] !== "object" || cur[part] === null) {
+      cur[part] = {};
+    }
+    cur = cur[part] as Record<string, unknown>;
+  }
+  cur[parts[parts.length - 1]] = value;
+
+  writeFileSync(resolved.configPath, JSON.stringify(config, null, 2) + "\n");
+  process.stderr.write(`[code-explainer] Set ${key} = ${JSON.stringify(value)} in ${resolved.configPath}\n`);
+}
+
+export async function runConfig(rawArgs: string[] = []): Promise<void> {
+  const { flags, positional } = parseFlags(rawArgs);
+  const subcommand = positional[0];
+  const subArgs = positional.slice(1);
+
+  // Non-interactive subcommands for agent-native access.
+  if (subcommand === "show") { runConfigShow([...subArgs, ...Object.entries(flags).flatMap(([k, v]) => v === true ? [`--${k}`] : [`--${k}=${v}`])]); return; }
+  if (subcommand === "get") { runConfigGet(subArgs); return; }
+  if (subcommand === "set") { runConfigSet(subArgs); return; }
+
+  // Interactive TUI mode.
   const projectPath = join(process.cwd(), CONFIG_FILENAME);
   const globalPath = getGlobalConfigPath();
 
@@ -346,6 +468,9 @@ export async function runConfig(): Promise<void> {
   }
 
   intro(pc.bold(`code-explainer config (${scope})`));
+
+  // --yes: skip confirmation for non-interactive environments.
+  const skipConfirm = flagBool(flags, "yes", "y");
 
   let config = loadConfig(configPath);
 
@@ -383,5 +508,7 @@ export async function runConfig(): Promise<void> {
     writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
   }
 
-  outro(pc.green("Settings saved."));
+  if (!skipConfirm) {
+    outro(pc.green("Settings saved."));
+  }
 }

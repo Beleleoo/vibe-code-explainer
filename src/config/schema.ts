@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 
 export type Engine = "ollama" | "claude";
 export type DetailLevel = "minimal" | "standard" | "verbose";
@@ -130,6 +131,57 @@ export const DEFAULT_CONFIG: Config = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Zod schema — used to validate and parse config files at load time.
+// Using z.coerce where sensible so that older config files with slightly
+// different types (e.g., skipIfSlowMs stored as a string) still work.
+// ---------------------------------------------------------------------------
+
+const EngineSchema = z.enum(["ollama", "claude"]);
+const DetailLevelSchema = z.enum(["minimal", "standard", "verbose"]);
+const LanguageSchema = z.enum(["en", "pt", "es", "fr", "de", "it", "zh", "ja", "ko"]);
+const LearnerLevelSchema = z.enum(["none", "beginner", "intermediate", "regular"]);
+
+const HooksConfigSchema = z.object({
+  edit: z.boolean().default(true),
+  write: z.boolean().default(true),
+  bash: z.boolean().default(true),
+}).default({});
+
+const BashFilterConfigSchema = z.object({
+  capturePatterns: z.array(z.string()).default([]),
+}).default({});
+
+export const ConfigSchema = z.object({
+  engine: EngineSchema.default("ollama"),
+  ollamaModel: z.string().min(1).default("qwen3.5:4b"),
+  ollamaUrl: z.string().url().default("http://localhost:11434"),
+  detailLevel: DetailLevelSchema.default("standard"),
+  language: LanguageSchema.default("en"),
+  learnerLevel: LearnerLevelSchema.default("intermediate"),
+  hooks: HooksConfigSchema,
+  exclude: z.array(z.string()).default(["*.lock", "dist/**", "node_modules/**"]),
+  skipIfSlowMs: z.coerce.number().int().min(0).default(30000),
+  bashFilter: BashFilterConfigSchema,
+});
+
+export type ConfigInput = z.input<typeof ConfigSchema>;
+
+/**
+ * Validate a raw JSON object against the config schema.
+ * Returns a typed Config on success, or throws a ZodError-derived Error with
+ * a human-readable message listing all invalid fields.
+ */
+export function validateConfig(raw: unknown): Config {
+  const result = ConfigSchema.safeParse(raw);
+  if (result.success) return result.data;
+
+  const issues = result.error.issues
+    .map((i) => `  ${i.path.join(".") || "<root>"}: ${i.message}`)
+    .join("\n");
+  throw new Error(`[code-explainer] Invalid config:\n${issues}`);
+}
+
 function mergeConfig(base: Config, overlay: Partial<Config>): Config {
   return {
     ...base,
@@ -142,13 +194,31 @@ function mergeConfig(base: Config, overlay: Partial<Config>): Config {
   };
 }
 
+/**
+ * Read and parse a config file. Returns the partial config or null if the
+ * file is missing. Throws if the JSON is malformed or fails schema validation
+ * (so callers surface useful errors rather than silently using defaults).
+ */
 function tryReadJson(path: string): Partial<Config> | null {
   if (!existsSync(path)) return null;
+  let raw: unknown;
   try {
-    return JSON.parse(readFileSync(path, "utf-8")) as Partial<Config>;
-  } catch {
-    return null;
+    raw = JSON.parse(readFileSync(path, "utf-8"));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`[code-explainer] Config file ${path} is not valid JSON: ${msg}`);
   }
+  // Partial validation: only validate keys that are present. Unknown keys are
+  // ignored (forward-compat). We re-use ConfigSchema with .partial() so that
+  // missing keys fall through to the DEFAULT_CONFIG merger rather than errors.
+  const partial = ConfigSchema.partial().safeParse(raw);
+  if (!partial.success) {
+    const issues = partial.error.issues
+      .map((i) => `  ${i.path.join(".") || "<root>"}: ${i.message}`)
+      .join("\n");
+    throw new Error(`[code-explainer] Invalid config in ${path}:\n${issues}`);
+  }
+  return partial.data as Partial<Config>;
 }
 
 /**

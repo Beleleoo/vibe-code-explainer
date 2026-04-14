@@ -1,3 +1,5 @@
+import { parseFlags, flagBool } from "./flags.js";
+
 const args = process.argv.slice(2);
 const command = args[0];
 
@@ -10,7 +12,7 @@ async function main() {
     }
     case "config": {
       const { runConfig } = await import("./config.js");
-      await runConfig();
+      await runConfig(args.slice(1));
       break;
     }
     case "uninstall": {
@@ -19,8 +21,10 @@ async function main() {
       break;
     }
     case "summary": {
+      const { flags } = parseFlags(args.slice(1));
+      const json = flagBool(flags, "json", "j");
       const { printSummary } = await import("../session/tracker.js");
-      await printSummary();
+      await printSummary({ json });
       break;
     }
     case "session": {
