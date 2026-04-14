@@ -36,7 +36,25 @@ async function main() {
     }
     case "warmup": {
       const { runWarmup } = await import("../engines/ollama.js");
-      await runWarmup();
+      const { loadConfig, DEFAULT_CONFIG } = await import("../config/schema.js");
+      let config;
+      try {
+        config = loadConfig("code-explainer.config.json");
+      } catch {
+        config = DEFAULT_CONFIG;
+      }
+      process.stderr.write(`[code-explainer] Warming up ${config.ollamaModel}...\n`);
+      const result = await runWarmup(config);
+      if (result.kind === "ok") {
+        process.stderr.write("[code-explainer] Warmup complete. First real explanation will be fast.\n");
+      } else if (result.kind === "error") {
+        process.stderr.write(
+          `[code-explainer] Warmup failed. ${result.problem}. ${result.cause}. Fix: ${result.fix}.\n`
+        );
+        process.exit(1);
+      } else {
+        process.stderr.write(`[code-explainer] Warmup skipped: ${result.reason}\n`);
+      }
       break;
     }
     case "--help":

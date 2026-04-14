@@ -1,11 +1,7 @@
-import type {
-  Config,
-  DeepDiveItem,
-  ExplanationResult,
-  RiskLevel,
-} from "../config/schema.js";
+import type { Config } from "../config/schema.js";
 import { buildOllamaSystemPrompt, buildOllamaUserPrompt } from "../prompts/templates.js";
 import type { EngineOutcome } from "./types.js";
+import { parseResponse, truncateText } from "./parse.js";
 
 export type { EngineOutcome };
 
@@ -24,130 +20,6 @@ function isLoopback(url: string): boolean {
   } catch {
     return false;
   }
-}
-
-function extractJson(text: string): string | null {
-  const trimmed = text.trim();
-
-  // Strategy 1: already a raw JSON object.
-  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-    return trimmed;
-  }
-
-  // Strategy 2: fenced — ```json ... ``` (possibly missing closing ```).
-  const fenceOpenMatch = trimmed.match(/```(?:json)?\s*\n?/);
-  if (fenceOpenMatch) {
-    const afterOpen = trimmed.slice(fenceOpenMatch.index! + fenceOpenMatch[0].length);
-    const closingIdx = afterOpen.indexOf("```");
-    const inner = closingIdx !== -1 ? afterOpen.slice(0, closingIdx) : afterOpen;
-    const innerTrimmed = inner.trim();
-    if (innerTrimmed.startsWith("{")) {
-      // Slice from first { to the matching brace at the end of the candidate.
-      const lastBrace = innerTrimmed.lastIndexOf("}");
-      if (lastBrace !== -1) {
-        return innerTrimmed.slice(0, lastBrace + 1);
-      }
-    }
-  }
-
-  // Strategy 3: JSON embedded in prose. Find the first balanced { ... }.
-  const firstOpen = trimmed.indexOf("{");
-  if (firstOpen !== -1) {
-    const balanced = extractBalancedObject(trimmed, firstOpen);
-    if (balanced) return balanced;
-
-    // Strategy 4 (last resort): slice from first { to last }.
-    const lastClose = trimmed.lastIndexOf("}");
-    if (lastClose > firstOpen) {
-      return trimmed.slice(firstOpen, lastClose + 1);
-    }
-  }
-
-  return null;
-}
-
-/**
- * Walk from startIdx forward, tracking {/} depth while respecting string
- * literals (so braces inside string values don't count). Returns the first
- * balanced object, or null if never balanced.
- */
-function extractBalancedObject(text: string, startIdx: number): string | null {
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = startIdx; i < text.length; i++) {
-    const ch = text[i];
-    if (escape) {
-      escape = false;
-      continue;
-    }
-    if (ch === "\\") {
-      escape = true;
-      continue;
-    }
-    if (ch === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) continue;
-    if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) {
-        return text.slice(startIdx, i + 1);
-      }
-    }
-  }
-  return null;
-}
-
-function coerceString(v: unknown): string {
-  return typeof v === "string" ? v : "";
-}
-
-function coerceDeepDive(v: unknown): DeepDiveItem[] {
-  if (!Array.isArray(v)) return [];
-  return v
-    .filter((it): it is { term?: unknown; explanation?: unknown } => typeof it === "object" && it !== null)
-    .map((it) => ({
-      term: coerceString(it.term),
-      explanation: coerceString(it.explanation),
-    }))
-    .filter((it) => it.term.length > 0);
-}
-
-function coerceRisk(v: unknown): RiskLevel {
-  // Keep parseable results even when the model emits a risk value outside the
-  // enum (e.g. "critical", "unknown", ""). Coercing to "none" preserves the
-  // structured impact/howItWorks/why/deepDive content instead of discarding
-  // the entire parse and falling back to raw text.
-  const s = coerceString(v);
-  return s === "low" || s === "medium" || s === "high" ? s : "none";
-}
-
-function parseResponse(rawText: string): ExplanationResult | null {
-  const json = extractJson(rawText);
-  if (!json) return null;
-  try {
-    const parsed = JSON.parse(json) as Record<string, unknown>;
-    return {
-      impact: coerceString(parsed.impact),
-      howItWorks: coerceString(parsed.howItWorks),
-      why: coerceString(parsed.why),
-      deepDive: coerceDeepDive(parsed.deepDive),
-      isSamePattern: parsed.isSamePattern === true,
-      samePatternNote: coerceString(parsed.samePatternNote),
-      risk: coerceRisk(parsed.risk),
-      riskReason: coerceString(parsed.riskReason),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function truncateText(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return text.slice(0, max) + "...";
 }
 
 export async function callOllama(inputs: OllamaCallInputs): Promise<EngineOutcome> {
@@ -200,9 +72,9 @@ export async function callOllama(inputs: OllamaCallInputs): Promise<EngineOutcom
     // can't produce JSON matching the complex schema we ask for — which
     // happens often with 4B–7B models and our 8-field schema (including
     // nested deepDive array). The system prompt already instructs the
-    // model to output only JSON; our extractJson()/parseResponse() logic
-    // handles JSON wrapped in code fences or embedded in prose, and falls
-    // back to placing raw text in the `impact` field if parsing fails.
+    // model to output only JSON; parse.ts handles JSON wrapped in code
+    // fences or embedded in prose, and we fall back to placing raw text
+    // in the `impact` field if parsing fails.
     const response = await fetch(`${config.ollamaUrl}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -292,29 +164,32 @@ export async function callOllama(inputs: OllamaCallInputs): Promise<EngineOutcom
   }
 }
 
-export async function runWarmup(): Promise<void> {
-  const { loadConfig, DEFAULT_CONFIG } = await import("../config/schema.js");
-  const config = (() => {
-    try {
-      return loadConfig("code-explainer.config.json");
-    } catch {
-      return DEFAULT_CONFIG;
-    }
-  })();
+export type WarmupResult =
+  | { kind: "ok" }
+  | { kind: "skip"; reason: string }
+  | { kind: "error"; problem: string; cause: string; fix: string };
 
-  process.stderr.write(`[code-explainer] Warming up ${config.ollamaModel}...\n`);
+/**
+ * Engine-agnostic warmup helper. Callers (init wizard, CLI `warmup`
+ * subcommand) format their own output — this helper just runs the
+ * warmup and returns a structured result so we don't have two divergent
+ * spinner/stderr implementations.
+ */
+export async function runWarmup(config: Config): Promise<WarmupResult> {
   const outcome = await callOllama({
     filePath: "warmup.txt",
     diff: "+ hello world",
     config: { ...config, skipIfSlowMs: 60000 },
   });
 
-  if (outcome.kind === "ok") {
-    process.stderr.write("[code-explainer] Warmup complete. First real explanation will be fast.\n");
-  } else if (outcome.kind === "error") {
-    process.stderr.write(`[code-explainer] Warmup failed. ${outcome.problem}. ${outcome.cause}. Fix: ${outcome.fix}.\n`);
-    process.exit(1);
-  } else {
-    process.stderr.write(`[code-explainer] Warmup skipped: ${outcome.reason}\n`);
+  if (outcome.kind === "ok") return { kind: "ok" };
+  if (outcome.kind === "error") {
+    return {
+      kind: "error",
+      problem: outcome.problem,
+      cause: outcome.cause,
+      fix: outcome.fix,
+    };
   }
+  return { kind: "skip", reason: outcome.reason };
 }

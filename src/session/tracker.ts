@@ -1,10 +1,10 @@
-import { existsSync, readFileSync, appendFileSync, unlinkSync, mkdirSync, readdirSync, statSync } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
+import { existsSync, readFileSync, appendFileSync, unlinkSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { RiskLevel } from "../config/schema.js";
 import { clearCache } from "../cache/explanation-cache.js";
 import { formatDriftAlert, printToStderr } from "../format/box.js";
 import { assertSafeSessionId } from "./session-id.js";
+import { getUserTmpDir } from "./tmpdir.js";
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
@@ -14,29 +14,6 @@ export interface SessionEntry {
   risk: RiskLevel;
   summary: string;
   unrelated?: boolean;
-}
-
-/**
- * Per-user tmp subdirectory for session and cache files.
- * We suffix with the OS username (works cross-platform; getuid is undefined
- * on Windows) so a shared %TEMP% on a multi-user Windows box does not
- * leak one user's session state into another's.
- */
-function getUserTmpDir(): string {
-  let suffix: string;
-  try {
-    const info = userInfo();
-    suffix = typeof info.username === "string" && info.username ? info.username : "user";
-  } catch {
-    suffix = "user";
-  }
-  // Defensive: keep the suffix itself path-safe.
-  suffix = suffix.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64) || "user";
-  const dir = join(tmpdir(), `code-explainer-${suffix}`);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
-  return dir;
 }
 
 export function getSessionFilePath(sessionId: string): string {

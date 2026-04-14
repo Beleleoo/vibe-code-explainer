@@ -20,7 +20,7 @@ import {
 import { detectPlatform, ollamaInstallCommand } from "../detect/platform.js";
 import { detectNvidiaVram, pickModelForVram, MODEL_OPTIONS } from "../detect/vram.js";
 import { mergeHooksIntoSettings, mergeHooksIntoUserSettings } from "../config/merge.js";
-import { callOllama } from "../engines/ollama.js";
+import { runWarmup as runWarmupEngine } from "../engines/ollama.js";
 
 type InstallScope = "project" | "global";
 
@@ -157,19 +157,13 @@ async function pullModel(model: string): Promise<boolean> {
 async function runWarmup(config: Config): Promise<void> {
   const s = spinner();
   s.start(`Warming up ${config.ollamaModel}`);
-
-  const outcome = await callOllama({
-    filePath: "warmup.txt",
-    diff: "+ hello world",
-    config: { ...config, skipIfSlowMs: 60000 },
-  });
-
-  if (outcome.kind === "ok") {
+  const result = await runWarmupEngine(config);
+  if (result.kind === "ok") {
     s.stop("Warmup complete. First real explanation will be fast.");
-  } else if (outcome.kind === "error") {
-    s.stop(`Warmup failed: ${outcome.problem}`);
+  } else if (result.kind === "error") {
+    s.stop(`Warmup failed: ${result.problem}`);
   } else {
-    s.stop(`Warmup skipped: ${outcome.reason}`);
+    s.stop(`Warmup skipped: ${result.reason}`);
   }
 }
 
