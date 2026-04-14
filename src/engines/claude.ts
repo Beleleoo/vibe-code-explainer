@@ -8,7 +8,6 @@ export interface ClaudeCallInputs {
   filePath: string;
   diff: string;
   config: Config;
-  userPrompt?: string;
   recentSummaries?: string[];
 }
 
@@ -60,7 +59,6 @@ export async function callClaude(inputs: ClaudeCallInputs): Promise<EngineOutcom
     prompt = buildClaudePrompt(inputs.config.detailLevel, {
       filePath: inputs.filePath,
       diff: inputs.diff,
-      userPrompt: inputs.userPrompt,
       language: inputs.config.language,
       learnerLevel: inputs.config.learnerLevel,
       recentSummaries: inputs.recentSummaries,

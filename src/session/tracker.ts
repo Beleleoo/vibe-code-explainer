@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, appendFileSync, unlinkSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, appendFileSync, unlinkSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { RiskLevel } from "../config/schema.js";
 import { clearCache } from "../cache/explanation-cache.js";
@@ -7,6 +7,9 @@ import { assertSafeSessionId } from "./session-id.js";
 import { getUserTmpDir } from "./tmpdir.js";
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+// Minimum interval between stale-file cleanup runs to avoid stat-ing the
+// tmpdir on every hook invocation (which fires for every Edit/Write/Bash).
+const CLEANUP_THROTTLE_MS = 60 * 1000;
 
 export interface SessionEntry {
   file: string;
@@ -55,17 +58,43 @@ export function readSession(sessionId: string): SessionEntry[] {
 /**
  * Get the last N recorded summaries for this session, oldest-first.
  * Used to feed prompt context for "same pattern" detection.
+ *
+ * Pass `entries` if you've already called readSession() to avoid a second
+ * disk read within the same hook invocation.
  */
-export function getRecentSummaries(sessionId: string, n: number): string[] {
-  const entries = readSession(sessionId);
-  if (entries.length === 0) return [];
-  return entries.slice(-n).map((e) => `${e.file}: ${e.summary}`);
+export function getRecentSummaries(sessionId: string, n: number, entries?: SessionEntry[]): string[] {
+  const all = entries ?? readSession(sessionId);
+  if (all.length === 0) return [];
+  return all.slice(-n).map((e) => `${e.file}: ${e.summary}`);
+}
+
+function getCleanupTimestampPath(): string {
+  return join(getUserTmpDir(), ".last-cleanup");
 }
 
 export function cleanStaleSessionFiles(): void {
   try {
-    const dir = getUserTmpDir();
+    const tsPath = getCleanupTimestampPath();
     const now = Date.now();
+
+    // Throttle: skip if we cleaned up recently.
+    if (existsSync(tsPath)) {
+      try {
+        const ts = parseInt(readFileSync(tsPath, "utf-8").trim(), 10);
+        if (!isNaN(ts) && now - ts < CLEANUP_THROTTLE_MS) return;
+      } catch {
+        // If the timestamp file is malformed, proceed with cleanup.
+      }
+    }
+
+    // Record the timestamp before cleaning so concurrent invocations see it.
+    try {
+      writeFileSync(tsPath, String(now), { mode: 0o600 });
+    } catch {
+      // Non-fatal — proceed with cleanup even if we can't update the timestamp.
+    }
+
+    const dir = getUserTmpDir();
     const entries = readdirSync(dir);
     for (const name of entries) {
       if (!name.startsWith("session-") && !name.startsWith("cache-")) continue;

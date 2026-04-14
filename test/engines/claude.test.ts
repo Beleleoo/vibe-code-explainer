@@ -51,7 +51,7 @@ describe("callClaude", () => {
     }
   });
 
-  it("passes user context to the prompt when provided", async () => {
+  it("includes file path and diff in the prompt", async () => {
     let capturedPrompt = "";
     execFileMock.mockImplementation((_cmd, args, _opts, cb) => {
       capturedPrompt = (args as string[])[1] || "";
@@ -61,16 +61,15 @@ describe("callClaude", () => {
 
     await callClaude({
       filePath: "app.tsx",
-      diff: "x",
+      diff: "+ const hero = true;",
       config: baseConfig,
-      userPrompt: "update the homepage",
     });
 
-    expect(capturedPrompt).toContain("update the homepage");
-    expect(capturedPrompt).toContain("UNRELATED-CHANGE CHECK");
+    expect(capturedPrompt).toContain("app.tsx");
+    expect(capturedPrompt).toContain("+ const hero = true;");
   });
 
-  it("omits relatedness check when user context is absent", async () => {
+  it("includes recent summaries in the prompt when provided", async () => {
     let capturedPrompt = "";
     execFileMock.mockImplementation((_cmd, args, _opts, cb) => {
       capturedPrompt = (args as string[])[1] || "";
@@ -82,9 +81,10 @@ describe("callClaude", () => {
       filePath: "app.tsx",
       diff: "x",
       config: baseConfig,
+      recentSummaries: ["src/hero.tsx: added animation"],
     });
 
-    expect(capturedPrompt).not.toContain("UNRELATED-CHANGE CHECK");
+    expect(capturedPrompt).toContain("src/hero.tsx: added animation");
   });
 
   it("returns error when claude command is not found (ENOENT)", async () => {

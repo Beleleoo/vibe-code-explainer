@@ -122,22 +122,23 @@ describe("buildOllamaUserPrompt", () => {
 });
 
 describe("buildClaudePrompt", () => {
-  it("includes user prompt when context is provided", () => {
+  it("includes file path and diff in the prompt", () => {
     const result = buildClaudePrompt("standard", {
       filePath: "src/app/page.tsx",
       diff: "- old\n+ new",
-      userPrompt: "update the hero",
     });
-    expect(result).toContain("update the hero");
-    expect(result).toContain("UNRELATED-CHANGE CHECK");
+    expect(result).toContain("src/app/page.tsx");
+    expect(result).toContain("- old");
+    expect(result).toContain("+ new");
   });
 
-  it("omits context-specific text when user prompt is absent", () => {
+  it("includes recent summaries when provided", () => {
     const result = buildClaudePrompt("standard", {
       filePath: "src/app/page.tsx",
       diff: "- old\n+ new",
+      recentSummaries: ["src/a.ts: added feature X"],
     });
-    expect(result).not.toContain("UNRELATED-CHANGE CHECK");
+    expect(result).toContain("src/a.ts: added feature X");
   });
 
   it("produces different prompts per detail level", () => {

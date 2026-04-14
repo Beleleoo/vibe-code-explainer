@@ -109,7 +109,6 @@ async function runEngine(
   filePath: string,
   diff: string,
   config: Config,
-  userPrompt: string | undefined,
   recentSummaries: string[],
   signal: AbortSignal
 ): Promise<EngineOutcome> {
@@ -119,7 +118,59 @@ async function runEngine(
   if (config.engine === "ollama") {
     return callOllama({ filePath, diff, config, recentSummaries });
   }
-  return callClaude({ filePath, diff, config, userPrompt, recentSummaries });
+  return callClaude({ filePath, diff, config, recentSummaries });
+}
+
+interface DiffTarget {
+  filePath: string;
+  diff: string;
+}
+
+/**
+ * Build a diff target from an Edit/Write/MultiEdit payload. Returns null and
+ * calls safeExit() internally for cases that should not produce an explanation
+ * (empty diff, excluded file, binary file, missing file path).
+ */
+function buildEditWriteDiff(payload: HookPayload, config: Config, cwd: string): DiffTarget | null {
+  const lowerTool = payload.tool_name.toLowerCase();
+  const input = payload.tool_input as {
+    file_path?: string;
+    filePath?: string;
+    old_string?: string;
+    new_string?: string;
+    oldString?: string;
+    newString?: string;
+    edits?: Array<{ old_string?: string; new_string?: string; oldString?: string; newString?: string }>;
+  };
+
+  const target = input.file_path ?? input.filePath;
+  if (!target) { safeExit(); }
+  const filePath = target as string;
+
+  if (isExcluded(filePath, config.exclude)) { safeExit(); }
+
+  // Preferred path: use the payload's old/new strings directly. This works
+  // for untracked files (very common) and is always more accurate than git
+  // diff, which may miss changes on files that were created and edited in
+  // the same session without a commit.
+  let result;
+  if (lowerTool === "edit") {
+    const oldStr = input.old_string ?? input.oldString ?? "";
+    const newStr = input.new_string ?? input.newString ?? "";
+    result = (oldStr || newStr) ? buildDiffFromEdit(filePath, oldStr, newStr) : extractEditDiff(filePath, cwd);
+  } else if (lowerTool === "multiedit") {
+    result = (input.edits && input.edits.length > 0)
+      ? buildDiffFromMultiEdit(filePath, input.edits)
+      : extractEditDiff(filePath, cwd);
+  } else {
+    result = extractNewFileDiff(filePath, cwd);
+  }
+
+  if (result.kind === "empty") { safeExit(); }
+  if (result.kind === "skip") { addOutput(formatSkipNotice(result.reason)); safeExit(); }
+  if (result.kind === "binary") { addOutput(formatSkipNotice(result.message)); safeExit(); }
+
+  return { filePath, diff: result.content };
 }
 
 async function main(): Promise<void> {
@@ -148,60 +199,15 @@ async function main(): Promise<void> {
   // commands pick the right session without re-parsing the payload).
   process.env.CODE_EXPLAINER_SESSION_ID = payload.session_id;
 
-  // Extract the diff based on tool name.
+  // Resolve filePath and diff based on tool type.
   let filePath: string;
   let diff: string;
 
   const lowerTool = payload.tool_name.toLowerCase();
   if (lowerTool === "edit" || lowerTool === "multiedit" || lowerTool === "write") {
-    const input = payload.tool_input as {
-      file_path?: string;
-      filePath?: string;
-      old_string?: string;
-      new_string?: string;
-      oldString?: string;
-      newString?: string;
-      edits?: Array<{ old_string?: string; new_string?: string; oldString?: string; newString?: string }>;
-    };
-    const target = input.file_path ?? input.filePath;
+    const target = buildEditWriteDiff(payload, config, cwd);
     if (!target) safeExit();
-    filePath = target as string;
-
-    if (isExcluded(filePath, config.exclude)) safeExit();
-
-    // Preferred path: use the payload's old/new strings directly. This works
-    // for untracked files (very common) and is always more accurate than git
-    // diff, which may miss changes on files that were created and edited in
-    // the same session without a commit.
-    let result;
-    if (lowerTool === "edit") {
-      const oldStr = input.old_string ?? input.oldString ?? "";
-      const newStr = input.new_string ?? input.newString ?? "";
-      if (oldStr || newStr) {
-        result = buildDiffFromEdit(filePath, oldStr, newStr);
-      } else {
-        result = extractEditDiff(filePath, cwd);
-      }
-    } else if (lowerTool === "multiedit") {
-      if (input.edits && input.edits.length > 0) {
-        result = buildDiffFromMultiEdit(filePath, input.edits);
-      } else {
-        result = extractEditDiff(filePath, cwd);
-      }
-    } else {
-      result = extractNewFileDiff(filePath, cwd);
-    }
-
-    if (result.kind === "empty") safeExit();
-    if (result.kind === "skip") {
-      addOutput(formatSkipNotice(result.reason));
-      safeExit();
-    }
-    if (result.kind === "binary") {
-      addOutput(formatSkipNotice(result.message));
-      safeExit();
-    }
-    diff = result.content;
+    ({ filePath, diff } = target as DiffTarget);
   } else if (lowerTool === "bash") {
     const input = payload.tool_input as { command?: string };
     const command = input.command ?? "";
@@ -212,6 +218,11 @@ async function main(): Promise<void> {
     safeExit();
   }
 
+  // Read session once — reused for recent summaries (prompt context) and
+  // drift analysis to avoid two disk reads per hook invocation.
+  const isBash = filePath === "<bash command>";
+  const priorEntries = isBash ? [] : readSession(payload.session_id);
+
   // Cache check.
   const cacheKey = `${filePath}\n${diff}`;
   const cached = getCached(payload.session_id, cacheKey);
@@ -220,15 +231,8 @@ async function main(): Promise<void> {
   if (cached) {
     result = cached;
   } else {
-    const recentSummaries = getRecentSummaries(payload.session_id, 3);
-    const outcome = await runEngine(
-      filePath,
-      diff,
-      config,
-      undefined,
-      recentSummaries,
-      controller.signal
-    );
+    const recentSummaries = getRecentSummaries(payload.session_id, 3, priorEntries);
+    const outcome = await runEngine(filePath, diff, config, recentSummaries, controller.signal);
     if (outcome.kind === "skip") {
       addOutput(formatSkipNotice(outcome.reason));
       safeExit();
@@ -243,8 +247,7 @@ async function main(): Promise<void> {
 
   // Path-heuristic drift analysis (only meaningful for Edit/Write).
   let driftReason: string | undefined;
-  if (filePath !== "<bash command>") {
-    const priorEntries = readSession(payload.session_id);
+  if (!isBash) {
     const analysis = analyzeDrift(filePath, priorEntries);
     if (analysis.isUnrelated) {
       driftReason = analysis.reason;
@@ -274,9 +277,17 @@ async function main(): Promise<void> {
     unrelated: !!driftReason,
   });
 
-  // Drift alert at threshold.
-  const updated = readSession(payload.session_id);
-  const driftCheck = shouldAlertDrift(updated);
+  // Drift alert at threshold — build fresh post-write list from priorEntries
+  // plus the entry we just recorded, without another disk read.
+  const entryJustRecorded: import("../session/tracker.js").SessionEntry = {
+    file: filePath,
+    timestamp: Date.now(),
+    risk: result.risk,
+    summary: summaryForTracking,
+    unrelated: !!driftReason,
+  };
+  const updatedEntries = [...priorEntries, entryJustRecorded];
+  const driftCheck = shouldAlertDrift(updatedEntries);
   if (driftCheck.shouldAlert) {
     addOutput(formatDriftAlert(driftCheck.totalFiles, driftCheck.unrelatedFiles, undefined, config.language));
   }

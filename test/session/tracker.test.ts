@@ -5,7 +5,9 @@ import {
   getSessionFilePath,
   cleanStaleSessionFiles,
 } from "../../src/session/tracker.js";
-import { existsSync, statSync, utimesSync } from "node:fs";
+import { existsSync, statSync, utimesSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+import { getUserTmpDir } from "../../src/session/tmpdir.js";
 
 const SESSION = "tracker-test-" + Date.now();
 
@@ -76,7 +78,16 @@ describe("recordEntry / readSession", () => {
   });
 });
 
+function clearCleanupThrottle() {
+  const tsPath = join(getUserTmpDir(), ".last-cleanup");
+  if (existsSync(tsPath)) {
+    try { unlinkSync(tsPath); } catch { /* noop */ }
+  }
+}
+
 describe("cleanStaleSessionFiles", () => {
+  beforeEach(() => clearCleanupThrottle());
+
   it("removes files older than 2 hours", () => {
     const staleId = "stale-test-" + Date.now();
     recordEntry(staleId, {

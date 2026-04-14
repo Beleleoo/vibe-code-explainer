@@ -181,7 +181,6 @@ const SCHEMA_SHAPE = `OUTPUT SCHEMA — output ONLY this JSON, nothing else befo
 export interface PromptInputs {
   filePath: string;
   diff: string;
-  userPrompt?: string;
   language?: Language;
   learnerLevel?: LearnerLevel;
   recentSummaries?: string[];
@@ -254,15 +253,7 @@ export function buildClaudePrompt(
   const fileLang = detectLanguage(inputs.filePath);
   const language = inputs.language ?? "en";
   const learnerLevel = inputs.learnerLevel ?? "intermediate";
-  const userPrompt = inputs.userPrompt;
   const recent = recentSummariesContext(inputs.recentSummaries ?? []);
-
-  const userContextBlock = userPrompt
-    ? `\nThe user originally asked the assistant to do this:
-"${userPrompt}"
-
-UNRELATED-CHANGE CHECK: If the change you are about to explain is NOT related to that request, set "risk" to at least "medium" and explain in "riskReason" that this change was not part of the original ask. Mention the specific mismatch.`
-    : "";
 
   return `You are code-explainer, a tool that helps non-developers understand and decide on code changes proposed by an AI coding assistant.
 
@@ -274,7 +265,6 @@ When teaching, focus on:
   - why: why this approach was used (idioms, patterns, common practice)
 
 A unified diff has "-" lines (removed) and "+" lines (added). Together they show a CHANGE. Only "+" lines = addition. Only "-" lines = removal.
-${userContextBlock}
 
 ${recent}
 
