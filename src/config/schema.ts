@@ -146,11 +146,11 @@ const HooksConfigSchema = z.object({
   edit: z.boolean().default(true),
   write: z.boolean().default(true),
   bash: z.boolean().default(true),
-}).default({});
+}).default({ edit: true, write: true, bash: true });
 
 const BashFilterConfigSchema = z.object({
   capturePatterns: z.array(z.string()).default([]),
-}).default({});
+}).default({ capturePatterns: [] });
 
 export const ConfigSchema = z.object({
   engine: EngineSchema.default("ollama"),
